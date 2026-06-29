@@ -55,6 +55,14 @@ def parse_week_date(s):
     return None
 
 
+def normalize_member(name):
+    """Normalize member name: collapse spaces, strip On Call prefix."""
+    name = re.sub(r'\s+', ' ', name).strip()
+    # Remove "On Call " prefix so "On Call Scott Marshall" → "Scott Marshall"
+    name = re.sub(r'(?i)^on call\s+', '', name).strip()
+    return name
+
+
 def parse_csv(file_bytes):
     text = file_bytes.decode("utf-8", errors="replace")
     rows = [r.split(",") for r in text.splitlines()]
@@ -86,11 +94,22 @@ def parse_csv(file_bytes):
     records = []
     current_day = None
 
+    # Determine Start Time column index (used to detect shift rows)
+    st_idx = col_map.get("Start Time", 1)
+    member_idx = col_map.get("Member Supported", len(rows[0]) - 1 if rows else 0)
+
     for row in rows[data_start_idx:]:
         if not row:
             continue
         cell0 = row[0].strip()
 
+        if "Total hours" in cell0:
+            continue
+
+        # ── New day header: "Sat May 23 2026" ───────────────────────────────
+        # IMPORTANT: The first shift of the day is on the SAME ROW as the date header.
+        # So after extracting the date, we do NOT skip — we fall through to process
+        # the shift data on that same row.
         day_m = re.match(r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\w+)\s+(\d+)\s+(\d{4})', cell0)
         if day_m:
             try:
@@ -99,25 +118,23 @@ def parse_csv(file_bytes):
                 ).date()
             except:
                 pass
-            continue
-
-        if "Total hours" in cell0:
-            continue
+            # Fall through — do NOT continue — the row may also contain shift data
 
         if current_day is None:
             continue
 
-        st_idx = col_map.get("Start Time", 1)
+        # ── Detect shift row by Start Time column ────────────────────────────
+        # Handles both: day-header rows (first shift inline) and
+        # continuation rows (empty cell0, subsequent shifts same day)
         start_val = row[st_idx].strip() if st_idx < len(row) else ""
         if not re.match(r'\d+:\d+', start_val):
             continue
 
-        member_idx = col_map.get("Member Supported")
-        if member_idx is None:
-            member_idx = len(row) - 1
-        member = row[member_idx].strip() if member_idx < len(row) else ""
-        if not member or member.lower() in ("undefined", ""):
+        # ── Member name ───────────────────────────────────────────────────────
+        raw_member = row[member_idx].strip() if member_idx < len(row) else ""
+        if not raw_member or raw_member.lower() in ("undefined", ""):
             continue
+        member = normalize_member(raw_member)
 
         rec = {"employee": employee, "day": current_day, "member": member}
         for hcol in HOUR_COLS:
