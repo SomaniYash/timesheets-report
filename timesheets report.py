@@ -349,23 +349,48 @@ def build_excel(agg, year, month):
 # Streamlit UI
 # ══════════════════════════════════════════════════════════════════════════════
 uploaded = st.file_uploader(
-    "Drop CSV files here (weekly exports — multiple employees, multiple weeks at once)",
-    type="csv",
+    "Drop CSV or ZIP files here (weekly exports — multiple employees, multiple weeks at once)",
+    type=["csv", "zip"],
     accept_multiple_files=True,
 )
 
+def extract_csv_files(uploaded_files):
+    """Return list of (filename, bytes) tuples from CSVs and ZIPs."""
+    import zipfile
+    csv_files = []
+    for f in uploaded_files:
+        if f.name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(f.read())) as zf:
+                    for name in zf.namelist():
+                        if name.lower().endswith(".csv") and not name.startswith("__MACOSX"):
+                            csv_files.append((name, zf.read(name)))
+            except Exception as ex:
+                st.warning(f"Could not open ZIP `{f.name}`: {ex}")
+        else:
+            csv_files.append((f.name, f.read()))
+    return csv_files
+
 if uploaded:
+    raw_csv_files = extract_csv_files(uploaded)
+
+    if not raw_csv_files:
+        st.error("No CSV files found in the uploaded files/ZIPs.")
+        st.stop()
+
+    st.caption(f"Found **{len(raw_csv_files)}** CSV file(s) across {len(uploaded)} uploaded file(s)")
+
     all_records = []
     parse_errors = []
     progress = st.progress(0)
 
-    for idx, f in enumerate(uploaded):
+    for idx, (fname, fbytes) in enumerate(raw_csv_files):
         try:
-            recs, _ = parse_csv(f.read())
+            recs, _ = parse_csv(fbytes)
             all_records.extend(recs)
         except Exception as ex:
-            parse_errors.append(f"`{f.name}`: {ex}")
-        progress.progress((idx + 1) / len(uploaded))
+            parse_errors.append(f"`{fname}`: {ex}")
+        progress.progress((idx + 1) / len(raw_csv_files))
     progress.empty()
 
     for e in parse_errors:
